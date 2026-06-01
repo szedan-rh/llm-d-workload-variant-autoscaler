@@ -25,6 +25,8 @@ A real-vLLM test exercises the full WVA decision loop against a live vLLM proces
 ```
 [inference requests]
        ↓
+[EPP + flow controller]  routes requests to vLLM; may throttle under heavy load
+       ↓
 [vLLM] emits real Prometheus metrics
    (vllm:num_requests_waiting, vllm:gpu_cache_usage_perc, …)
        ↓
@@ -54,6 +56,7 @@ then let the burst complete and verify scale-down. This is deterministic because
 - A burst of `max_num_seqs + N` concurrent requests immediately creates a non-zero `num_requests_waiting`
 - The saturation threshold is known from the deployed ConfigMap (default: `queueLengthThreshold: 5`)
 - The burst size is fixed (`threshold + 2`), so queue drain time is bounded
+- The flow controller does not throttle the burst below the saturation threshold (validated empirically: 10 concurrent requests reach vLLM and saturate the queue on the nightly cluster)
 
 This mirrors the pattern already used in `scale_from_zero_test.go`, which sends a small
 curl Job to trigger the zero→one transition.
