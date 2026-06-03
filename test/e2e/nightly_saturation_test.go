@@ -38,13 +38,8 @@ const (
 	// BeforeAll. cfg.NightlyBurstSize must exceed this for the burst to saturate the queue.
 	nightlyQueueThreshold = 5
 	nightlyMaxTokens      = 1500 // keeps requests in-flight long enough for WVA to detect saturation; must be < max-model-len (2048)
-	nightlyScaleDownSec   = 600  // pod model load (~4min) + WVA cycle (30s) + KEDA poll (5s) + prometheus-adapter 300s HPA stabilization + buffer
+	nightlyScaleDownSec   = 600  // pod model load (~4min) + WVA cycle (30s) + 300s HPA scale-down stabilization (both KEDA and prometheus-adapter) + buffer
 	nightlyVariantCost    = 10.0 // GPU cost for the nightly VA; lower than the simulator default (30.0) to match OCP cluster GPU budget
-
-	nightlyDeploymentName = "optimized-baseline-nvidia-gpu-vllm-decode"
-	nightlyVAName         = "optimized-baseline-nvidia-gpu-vllm-decode"
-	// nightlyHPAName is nightlyVAName + "-hpa" appended by the fixtures HPA builder.
-	nightlyHPAName = nightlyVAName + "-hpa"
 
 	// nightlyOCPPrometheusURL is the thanos-querier endpoint used by KEDA on OpenShift.
 	// KEDA queries this directly via bearer-token auth (nightlyOCPKEDATriggerAuth).
@@ -54,8 +49,15 @@ const (
 
 // discoverNightlyGateway finds the inference-gateway Service name. The gateway is part of the
 // infra deploy step and must exist before the test runs.
+// If GATEWAY_NAME is set (injected by the llm-d-infra reusable workflow), it is used directly.
+// Otherwise the namespace is scanned for any Service whose name contains "inference-gateway".
 func discoverNightlyGateway() string {
 	GinkgoHelper()
+
+	if cfg.GatewayName != "" {
+		GinkgoWriter.Printf("Nightly gateway: %s (from GATEWAY_NAME)\n", cfg.GatewayName)
+		return cfg.GatewayName
+	}
 
 	svcs, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{})
 	Expect(err).NotTo(HaveOccurred(), "should list services in llmd namespace")
@@ -78,14 +80,14 @@ func createNightlyWVAResources() {
 	GinkgoHelper()
 	Expect(fixtures.EnsureVariantAutoscaling(
 		ctx, crClient,
-		cfg.LLMDNamespace, nightlyVAName, nightlyDeploymentName,
+		cfg.LLMDNamespace, cfg.NightlyDeployment, cfg.NightlyDeployment,
 		cfg.ModelID, cfg.AcceleratorType,
 		nightlyVariantCost, cfg.ControllerInstance,
 	)).To(Succeed(), "creating nightly VariantAutoscaling")
 	if cfg.ScalerBackend == scalerBackendKeda {
 		Expect(fixtures.EnsureScaledObject(
 			ctx, crClient,
-			cfg.LLMDNamespace, nightlyVAName, nightlyDeploymentName, nightlyVAName,
+			cfg.LLMDNamespace, cfg.NightlyDeployment, cfg.NightlyDeployment, cfg.NightlyDeployment,
 			1, 4, cfg.MonitoringNS,
 			fixtures.WithScaledObjectPrometheusServer(nightlyOCPPrometheusURL),
 			fixtures.WithScaledObjectClusterTriggerAuth(nightlyOCPKEDATriggerAuth),
@@ -93,25 +95,25 @@ func createNightlyWVAResources() {
 	} else {
 		Expect(fixtures.EnsureHPA(
 			ctx, k8sClient,
-			cfg.LLMDNamespace, nightlyVAName, nightlyDeploymentName, nightlyVAName,
+			cfg.LLMDNamespace, cfg.NightlyDeployment, cfg.NightlyDeployment, cfg.NightlyDeployment,
 			1, 4,
 		)).To(Succeed(), "creating nightly HPA")
 	}
-	GinkgoWriter.Printf("Nightly resources created: va=%s scaler=%s(%s) deployment=%s\n",
-		nightlyVAName, nightlyHPAName, cfg.ScalerBackend, nightlyDeploymentName)
+	GinkgoWriter.Printf("Nightly resources created: va=%s scaler=%s-hpa(%s) deployment=%s\n",
+		cfg.NightlyDeployment, cfg.NightlyDeployment, cfg.ScalerBackend, cfg.NightlyDeployment)
 }
 
 // deleteNightlyWVAResources removes the VA and scaler created by createNightlyWVAResources.
 func deleteNightlyWVAResources() {
-	if err := fixtures.DeleteVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, nightlyVAName); err != nil {
+	if err := fixtures.DeleteVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, cfg.NightlyDeployment); err != nil {
 		GinkgoWriter.Printf("Warning: failed to delete nightly VA: %v\n", err)
 	}
 	if cfg.ScalerBackend == scalerBackendKeda {
-		if err := fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, nightlyVAName); err != nil {
+		if err := fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, cfg.NightlyDeployment); err != nil {
 			GinkgoWriter.Printf("Warning: failed to delete nightly ScaledObject: %v\n", err)
 		}
 	} else {
-		if err := fixtures.DeleteHPA(ctx, k8sClient, cfg.LLMDNamespace, nightlyVAName); err != nil {
+		if err := fixtures.DeleteHPA(ctx, k8sClient, cfg.LLMDNamespace, cfg.NightlyDeployment); err != nil {
 			GinkgoWriter.Printf("Warning: failed to delete nightly HPA: %v\n", err)
 		}
 	}
@@ -281,13 +283,13 @@ func assertSaturationScaleUp(jobName, gatewayService, vaName, hpaName string) {
 			g.Expect(err).NotTo(HaveOccurred())
 			var found bool
 			for i := range hpaList.Items {
-				if hpaList.Items[i].Spec.ScaleTargetRef.Name == nightlyDeploymentName {
+				if hpaList.Items[i].Spec.ScaleTargetRef.Name == cfg.NightlyDeployment {
 					desiredReplicas = hpaList.Items[i].Status.DesiredReplicas
 					found = true
 					break
 				}
 			}
-			g.Expect(found).To(BeTrue(), "KEDA-managed HPA targeting %s not found", nightlyDeploymentName)
+			g.Expect(found).To(BeTrue(), "KEDA-managed HPA targeting %s not found", cfg.NightlyDeployment)
 		} else {
 			hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
@@ -316,14 +318,14 @@ func assertSaturationScaleDown(hpaName string) {
 
 	By("Waiting for scaled-up deployment to have 2 Ready replicas (WVA scale-down requires both pods non-saturated)")
 	Eventually(func(g Gomega) {
-		dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, nightlyDeploymentName, metav1.GetOptions{})
+		dep, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, cfg.NightlyDeployment, metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(dep.Status.ReadyReplicas).To(BeNumerically(">=", 2),
 			"deployment should have ≥ 2 Ready replicas before scale-down can be approved")
 	}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSlowSec)*time.Second).Should(Succeed())
 
 	By("Waiting for HPA to return to minReplicas after queue drains " +
-		"(WVA requires ≥2 pods non-saturated; KEDA: 30s cooldown; prometheus-adapter: 300s HPA scale-down stabilization)")
+		"(WVA requires ≥2 pods non-saturated; HPA 300s scale-down stabilization window applies for both KEDA and prometheus-adapter; KEDA CooldownPeriod only governs scale-to-zero)")
 	Eventually(func(g Gomega) {
 		minReplicas := int32(1)
 		var desiredReplicas int32
@@ -332,7 +334,7 @@ func assertSaturationScaleDown(hpaName string) {
 			g.Expect(err).NotTo(HaveOccurred())
 			var found bool
 			for i := range hpaList.Items {
-				if hpaList.Items[i].Spec.ScaleTargetRef.Name == nightlyDeploymentName {
+				if hpaList.Items[i].Spec.ScaleTargetRef.Name == cfg.NightlyDeployment {
 					if hpaList.Items[i].Spec.MinReplicas != nil {
 						minReplicas = *hpaList.Items[i].Spec.MinReplicas
 					}
@@ -341,7 +343,7 @@ func assertSaturationScaleDown(hpaName string) {
 					break
 				}
 			}
-			g.Expect(found).To(BeTrue(), "KEDA-managed HPA targeting %s not found", nightlyDeploymentName)
+			g.Expect(found).To(BeTrue(), "KEDA-managed HPA targeting %s not found", cfg.NightlyDeployment)
 		} else {
 			hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
@@ -373,11 +375,11 @@ var _ = Describe("Nightly Saturation — V1 Threshold Analyzer", Label("nightly"
 		if cfg.Environment != environmentOpenShift {
 			Skip("nightly saturation tests require ENVIRONMENT=openshift")
 		}
-		checkGPUCapacity(nightlyDeploymentName, 2)
+		checkGPUCapacity(cfg.NightlyDeployment, 2)
 		gatewayService = discoverNightlyGateway()
 		createNightlyWVAResources()
-		vaName = nightlyVAName
-		hpaName = nightlyHPAName
+		vaName = cfg.NightlyDeployment
+		hpaName = cfg.NightlyDeployment + "-hpa"
 
 		cmName, cmOriginal, cmExistedBefore = snapshotNightlySaturationCM()
 		// nightlyQueueThreshold=5 is written into the config below; burst size must exceed it.
@@ -428,11 +430,11 @@ var _ = Describe("Nightly Saturation — V2 Token Analyzer", Label("nightly"), O
 		if cfg.Environment != environmentOpenShift {
 			Skip("nightly saturation tests require ENVIRONMENT=openshift")
 		}
-		checkGPUCapacity(nightlyDeploymentName, 2)
+		checkGPUCapacity(cfg.NightlyDeployment, 2)
 		gatewayService = discoverNightlyGateway()
 		createNightlyWVAResources()
-		vaName = nightlyVAName
-		hpaName = nightlyHPAName
+		vaName = cfg.NightlyDeployment
+		hpaName = cfg.NightlyDeployment + "-hpa"
 
 		cmName, cmOriginal, cmExistedBefore = snapshotNightlySaturationCM()
 		v2Config := buildSaturationConfigYAML("saturation")
