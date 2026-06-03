@@ -31,6 +31,12 @@ type E2EConfig struct {
 
 	// Prometheus Adapter BeforeSuite: probe this long before optional pod restart (seconds)
 	PrometheusAdapterProbeSec int
+
+	// NightlyBurstSize is the number of concurrent requests sent by the nightly saturation burst
+	// job. Default 10 is correct for production models (Llama-8B+ at ~30 tok/s with max-num-seqs=1
+	// keeps the queue saturated for minutes). Override with E2E_NIGHTLY_BURST_SIZE for fast models
+	// like opt-125m on H100 where 10 requests drain in <2s.
+	NightlyBurstSize int
 }
 
 // LoadConfigFromEnv reads e2e test configuration from environment variables.
@@ -53,6 +59,7 @@ func LoadConfigFromEnv() E2EConfig {
 		PollIntervalSlowSec:       testconfig.GetEnvInt("E2E_EVENTUALLY_POLL_SLOW", 10),
 		PollIntervalVerySlowSec:   testconfig.GetEnvInt("E2E_EVENTUALLY_POLL_VERY_SLOW", 15),
 		PrometheusAdapterProbeSec: testconfig.GetEnvInt("E2E_PROM_ADAPTER_PROBE_SEC", 90),
+		NightlyBurstSize:          testconfig.GetEnvInt("E2E_NIGHTLY_BURST_SIZE", 10),
 	}
 
 	// OpenShift clusters typically don't have the HPAScaleToZero feature gate enabled, so native HPAs
