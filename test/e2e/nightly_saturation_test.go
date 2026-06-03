@@ -370,7 +370,7 @@ var _ = Describe("Nightly Saturation — V1 Threshold Analyzer", Label("nightly"
 		if cfg.UseSimulator {
 			Skip("nightly saturation tests require USE_SIMULATOR=false (real vLLM)")
 		}
-		if cfg.Environment != "openshift" {
+		if cfg.Environment != environmentOpenShift {
 			Skip("nightly saturation tests require ENVIRONMENT=openshift")
 		}
 		checkGPUCapacity(nightlyDeploymentName, 2)
@@ -425,7 +425,7 @@ var _ = Describe("Nightly Saturation — V2 Token Analyzer", Label("nightly"), O
 		if cfg.UseSimulator {
 			Skip("nightly saturation tests require USE_SIMULATOR=false (real vLLM)")
 		}
-		if cfg.Environment != "openshift" {
+		if cfg.Environment != environmentOpenShift {
 			Skip("nightly saturation tests require ENVIRONMENT=openshift")
 		}
 		checkGPUCapacity(nightlyDeploymentName, 2)

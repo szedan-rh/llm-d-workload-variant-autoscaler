@@ -4,6 +4,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/testconfig"
 )
 
+const environmentOpenShift = "openshift"
+
 // E2EConfig holds configuration for e2e tests loaded from environment variables.
 // Common fields are inherited from testconfig.SharedConfig.
 type E2EConfig struct {
@@ -66,7 +68,7 @@ func LoadConfigFromEnv() E2EConfig {
 	// cannot use minReplicas=0 ("scale-to-zero" on the HPA). Ignore SCALE_TO_ZERO_ENABLED there so e2e
 	// does not assume that path (creation fails with: minReplicas must be >= 1).
 	// Scale-from-zero (scaling workloads up from zero replicas) is separate; this block does not configure SCALER_BACKEND.
-	if cfg.Environment == "openshift" && cfg.ScaleToZeroEnabled {
+	if cfg.Environment == environmentOpenShift && cfg.ScaleToZeroEnabled {
 		cfg.ScaleToZeroEnabled = false
 	}
 
