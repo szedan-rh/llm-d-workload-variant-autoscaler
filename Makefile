@@ -29,6 +29,7 @@ GAIE_VERSION                ?= v1.5.0
 KV_SPARE_TRIGGER           ?=
 QUEUE_SPARE_TRIGGER         ?=
 E2E_MONITORING_NAMESPACE    ?= workload-variant-autoscaler-monitoring
+E2E_LLMD_NAMESPACE          ?= llm-d-sim
 E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
 E2E_WVA_SECONDARY_OVERLAY_PATH ?= $(CURDIR)/test/e2e/testdata/secondary-controller
 # llm-d-benchmark CLI configuration
@@ -286,7 +287,7 @@ test-e2e-full: ## Run full e2e test suite
 	KUBECONFIG=$(KUBECONFIG) \
 	ENVIRONMENT=$(ENVIRONMENT) \
 	WVA_NAMESPACE=$(CONTROLLER_NAMESPACE) \
-	LLMD_NAMESPACE=$(LLMD_NAMESPACE) \
+	LLMD_NAMESPACE=$(E2E_LLMD_NAMESPACE) \
 	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
 	WVA_E2E_SECONDARY_OVERLAY_PATH=$${WVA_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_WVA_SECONDARY_OVERLAY_PATH)} \
 	USE_SIMULATOR=$(USE_SIMULATOR) \
@@ -517,7 +518,7 @@ benchmark-full: benchmark-standup benchmark-run-all benchmark-teardown ## Full l
 # by the nightly label tests (real-vLLM saturation). Requires ENVIRONMENT=openshift.
 .PHONY: nightly-test-llm-d
 nightly-test-llm-d: ## Nightly CI: run full + nightly e2e against real vLLM on OCP
-	ENVIRONMENT=openshift USE_SIMULATOR=false E2E_MONITORING_NAMESPACE=openshift-user-workload-monitoring $(MAKE) test-e2e-full
+	ENVIRONMENT=openshift USE_SIMULATOR=false E2E_MONITORING_NAMESPACE=openshift-user-workload-monitoring E2E_LLMD_NAMESPACE=$(LLMD_NAMESPACE) $(MAKE) test-e2e-full
 	ENVIRONMENT=openshift USE_SIMULATOR=false E2E_MONITORING_NAMESPACE=openshift-user-workload-monitoring $(MAKE) test-e2e-nightly
 
 # Canonical target for llm-d-infra nightly reusables: ENVIRONMENT=openshift|kubernetes
