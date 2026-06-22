@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout base repo (not PR code) for paths-filter
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
