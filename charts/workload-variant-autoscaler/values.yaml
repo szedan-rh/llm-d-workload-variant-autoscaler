@@ -10,14 +10,14 @@ wva:
 
   image:
     repository: ghcr.io/llm-d/llm-d-workload-variant-autoscaler
-    tag: v0.7.0
+    tag: v0.8.0
   imagePullPolicy: Always
 
   metrics:
     enabled: true
     port: 8443
     secure: true
-  
+
   # If true, the controller will only watch the namespace it is deployed in.
   # If false, the controller will watch all namespaces (cluster-scoped).
   namespaceScoped: true
@@ -32,7 +32,7 @@ wva:
     # will require recreating the ConfigMap and restarting the controller).
     # Default: false (allows runtime updates for dynamic configuration)
     immutable: false
-    
+
   prometheus:
     monitoringNamespace: openshift-user-workload-monitoring
     serviceAccountName: "kube-prometheus-stack-prometheus"
@@ -72,7 +72,7 @@ wva:
       queueLengthThreshold: 5     # Replica saturated if queue length >= threshold
       kvSpareTrigger: 0.1         # Scale-up if avg spare KV capacity < trigger (0.0-1.0)
       queueSpareTrigger: 3        # Scale-up if avg spare queue capacity < trigger
-    
+
     # Per-model/namespace overrides (optional)
     # Example:
     # overrides:
@@ -88,19 +88,19 @@ llmd:
   modelName: ms-workload-autoscaler-llm-d-modelservice
   modelID: "Qwen/Qwen3-0.6B"
 
-  # scaleTargetKind: Optional. If not specified or empty, it will be set to "Deployment". 
+  # scaleTargetKind: Optional. If not specified or empty, it will be set to "Deployment".
   # Valid values are "Deployment", "LeaderWorkerSet" - case sensitive.
   #scaleTargetKind: "Deployment"
-  
+
   # scaleTargetName: Name of the scale target resource.
   # For "Deployment": name of the Deployment.
   # For "LeaderWorkerSet": name of the LeaderWorkerSet.
-  #scaleTargetName: 
+  #scaleTargetName:
 
 va:
   enabled: true
   # accelerator: Optional. If not specified, it will be auto-discovered
-  # from scale target. If specified, it will be used as fall-back value if it can't 
+  # from scale target. If specified, it will be used as fall-back value if it can't
   # be discovered.
   accelerator: H100
   # Cost per replica in arbitrary units (higher = more expensive to scale)
