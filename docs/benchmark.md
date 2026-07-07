@@ -442,6 +442,63 @@ Summary of WVA benchmark runs with configuration details.
 | Avg pod startup (s) | 62 | 64 | 67 | 64 |
 | Cost (avg replicas × GPU/hr) | 1.79 | 1.81 | 1.81 | 1.80 |
 
+## Two-Variant Efficiency-Aware Scenario
+
+Runs the [two-variant WVA benchmark](developer-guide/two-variant-wva-benchmark.md):
+two TP variants of the same model share one `InferencePool`/EPP, each with its own
+`VariantAutoscaling` + HPA.  The WVA V2 saturation engine scales the **most
+efficient** variant first (highest serving-capacity per unit cost) and routes
+spillover to the cheaper TP=1 secondary.
+
+**Hardware:** NVIDIA H100 (OpenShift cluster)
+**Setup:** Primary TP=2 (cost=10, max=10), secondary TP=1 (cost=5, max=10),
+WVA V2 saturation engine, HPA scaleUp window=0s
+
+> **Cost formula:** `(avg_primary × 2 + avg_secondary × 1) × GPU/hr` — weights
+> each variant by its TP (GPU) count so the cost column is a true GPU-hour proxy.
+
+### Two-Variant — Meta-Llama-3.1-8B-Instruct (Prefill Heavy, 600s)
+
+**llm-d Release:** v0.8.0
+**Model:** unsloth/Meta-Llama-3.1-8B-Instruct
+**Workload:** 4000 prompt tokens, 1000 output tokens, 15 RPS, 600s duration
+**Saturation Engine:** V2 (saturation)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| P99 ITL (ms/token) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg primary replicas (TP=2) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Max primary replicas (TP=2) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg secondary replicas (TP=1) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Max secondary replicas (TP=1) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg KV cache utilization | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg queue depth (EPP) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Error count | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg pod startup (s) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Cost (weighted avg replicas × GPU/hr) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+
+### Two-Variant — Meta-Llama-3.1-8B-Instruct (Symmetrical, 600s)
+
+**llm-d Release:** v0.8.0
+**Model:** unsloth/Meta-Llama-3.1-8B-Instruct
+**Workload:** 1000 prompt tokens, 1000 output tokens, 15 RPS, 600s duration
+**Saturation Engine:** V2 (saturation)
+
+| Metric | Run 1 | Run 2 | Run 3 | Avg |
+|--------|-------|-------|-------|-----|
+| P99 TTFT (ms) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| P99 ITL (ms/token) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg primary replicas (TP=2) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Max primary replicas (TP=2) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg secondary replicas (TP=1) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Max secondary replicas (TP=1) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg KV cache utilization | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg queue depth (EPP) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Error count | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Avg pod startup (s) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Cost (weighted avg replicas × GPU/hr) | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+
 ### Symmetrical — Qwen/Qwen3-0.6B (1800s)
 
 **llm-d Release:** v0.6.0

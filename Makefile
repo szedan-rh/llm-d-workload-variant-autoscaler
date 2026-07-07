@@ -363,7 +363,7 @@ LLMDBENCHMARK        = $(shell command -v llmdbenchmark 2>/dev/null || echo $(BE
 BENCHMARK_CLI_FLAGS = --spec $(BENCHMARK_SPEC) --workspace $(BENCHMARK_WORKSPACE) --base-dir $(BENCHMARK_REPO_DIR)
 
 .PHONY: benchmark-install
-benchmark-install: ## Clone llm-d-benchmark at BENCHMARK_REPO_REF (default v0.6.3) and install the llmdbenchmark CLI
+benchmark-install: ## Clone llm-d-benchmark at BENCHMARK_REPO_REF (default v0.7.0) and install the llmdbenchmark CLI
 	@if [ ! -d "$(BENCHMARK_REPO_DIR)" ]; then \
 		echo "Cloning llm-d-benchmark @ $(BENCHMARK_REPO_REF)..."; \
 		git clone --branch $(BENCHMARK_REPO_REF) $(BENCHMARK_REPO_URL) $(BENCHMARK_REPO_DIR); \
@@ -382,16 +382,38 @@ benchmark-standup: ## Stand up the benchmark environment (set BENCHMARK_NAMESPAC
 		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-standup BENCHMARK_NAMESPACE=<namespace>"; \
 		exit 1; \
 	fi
-	@echo "Injecting PYTORCH_ALLOC_CONF into scenario YAML..."
+	@if [ -f "$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml" ]; then \
+		echo "Copying local scenario: hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml -> $(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml"; \
+		mkdir -p "$(BENCHMARK_REPO_DIR)/config/scenarios/$$(dirname $(BENCHMARK_SPEC))"; \
+		cp "$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml" \
+		   "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml"; \
+	fi
+	@if [ -f "$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml.j2" ]; then \
+		echo "Copying local specification: hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml.j2 -> $(BENCHMARK_REPO_DIR)/config/specification/$(BENCHMARK_SPEC).yaml.j2"; \
+		mkdir -p "$(BENCHMARK_REPO_DIR)/config/specification/$$(dirname $(BENCHMARK_SPEC))"; \
+		cp "$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml.j2" \
+		   "$(BENCHMARK_REPO_DIR)/config/specification/$(BENCHMARK_SPEC).yaml.j2"; \
+	fi
+	@if [ "$(BENCHMARK_SKIP_PROMETHEUS_ADAPTER)" = "true" ]; then \
+		echo "Stubbing prometheus-adapter-resource-reader ClusterRole so standup's existing-PA probe passes..."; \
+		kubectl create clusterrole prometheus-adapter-resource-reader \
+			--verb=get,list,watch --resource=pods,nodes 2>/dev/null || true; \
+		kubectl annotate --overwrite clusterrole prometheus-adapter-resource-reader \
+			meta.helm.sh/release-name=prometheus-adapter \
+			meta.helm.sh/release-namespace=$(WVA_MONITORING_NAMESPACE); \
+		kubectl label --overwrite clusterrole prometheus-adapter-resource-reader \
+			app.kubernetes.io/managed-by=Helm; \
+	fi
+	@echo "Injecting PYTORCH_ALLOC_CONF into scenario YAML ($(BENCHMARK_SPEC).yaml)..."
 	@sed -i.bak 's/extraEnvVars: \[\]/extraEnvVars:\n        - name: PYTORCH_ALLOC_CONF\n          value: "expandable_segments:True"/' \
-		$(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml
+		$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml
 	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) standup \
 		-p $(BENCHMARK_NAMESPACE) \
 		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
 		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,); \
 	rc=$$?; \
-	mv $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml.bak \
-	   $(BENCHMARK_REPO_DIR)/config/scenarios/guides/workload-autoscaling.yaml; \
+	mv $(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml.bak \
+	   $(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml; \
 	exit $$rc
 
 .PHONY: benchmark-run
@@ -403,6 +425,8 @@ benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<name
 	@if [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" ]; then \
 		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" \
 		   "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD).in"; \
+		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" \
+		   "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD)"; \
 	fi
 	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) run \
 		-p $(BENCHMARK_NAMESPACE) \
@@ -415,6 +439,7 @@ benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<name
 	@echo "  Generating benchmark report..."
 	@echo "========================================="
 	@$(MAKE) benchmark-report
+	@$(MAKE) benchmark-plot-two-variant || true
 
 .PHONY: benchmark-report
 benchmark-report: ## Generate a markdown table from the latest benchmark results
@@ -425,7 +450,62 @@ benchmark-report: ## Generate a markdown table from the latest benchmark results
 	fi; \
 	echo "Results directory: $$LATEST_DIR"; \
 	echo ""; \
-	python3 $(CURDIR)/hack/benchmark/postprocess.py $$LATEST_DIR
+	if [ -n "$(BENCHMARK_TWO_VARIANT_SECONDARY_SUFFIX)" ]; then \
+		python3 $(CURDIR)/hack/benchmark/postprocess.py \
+			--secondary-suffix $(BENCHMARK_TWO_VARIANT_SECONDARY_SUFFIX) \
+			--scenario-yaml $(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml \
+			--variant-config $(VARIANT_CONFIG) \
+			$$LATEST_DIR; \
+	else \
+		python3 $(CURDIR)/hack/benchmark/postprocess.py $$LATEST_DIR; \
+	fi
+
+BENCHMARK_TWO_VARIANT_SECONDARY_SUFFIX ?= v2
+
+.PHONY: benchmark-plot-two-variant
+benchmark-plot-two-variant: ## Plot two-variant replica/latency/throughput graph from the latest results (no-op for single-variant runs)
+	@LATEST_DIR=$$(ls -td $(BENCHMARK_WORKSPACE)/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_* 2>/dev/null | head -1); \
+	if [ -z "$$LATEST_DIR" ]; then \
+		echo "No benchmark results found, skipping two-variant plot"; \
+		exit 0; \
+	fi; \
+	python3 $(CURDIR)/hack/benchmark/plot_two_variant_pipeline.py \
+		$$LATEST_DIR && \
+	echo "Two-variant plot: $$LATEST_DIR/metrics/graphs/two_variant_v2_full_pipeline.png"
+
+VARIANT_CONFIG ?= $(CURDIR)/hack/benchmark/scenarios/guides/variants/v2-tp1-cheaper.yaml
+WVA_V2_SATURATION_CONFIGMAP ?= $(CURDIR)/hack/benchmark/scenarios/wva_threshold/wva_saturation_v2_config.yaml
+WVA_CONTROLLER_DEPLOY ?= deploy/workload-variant-autoscaler-controller-manager
+WVA_ROLLOUT_TIMEOUT ?= 120s
+WVA_MONITORING_NAMESPACE ?= workload-variant-autoscaler-monitoring
+
+.PHONY: benchmark-add-variant
+benchmark-add-variant: ## Add a secondary WVA variant to the running benchmark (set BENCHMARK_NAMESPACE=<namespace>, optional VARIANT_CONFIG=<path>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-add-variant BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	python3 $(CURDIR)/hack/benchmark/add_variant.py \
+		-n $(BENCHMARK_NAMESPACE) \
+		--config $(VARIANT_CONFIG)
+
+.PHONY: benchmark-enable-v2-saturation
+benchmark-enable-v2-saturation: ## Enable WVA saturation V2 analyzer (apply configmap + restart controller)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-enable-v2-saturation BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	kubectl apply -n $(BENCHMARK_NAMESPACE) -f $(WVA_V2_SATURATION_CONFIGMAP)
+	$(MAKE) benchmark-restart-controller BENCHMARK_NAMESPACE=$(BENCHMARK_NAMESPACE)
+
+.PHONY: benchmark-restart-controller
+benchmark-restart-controller: ## Restart WVA controller to flush in-memory state (e.g., k2 history between runs)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-restart-controller BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	kubectl rollout restart -n $(BENCHMARK_NAMESPACE) $(WVA_CONTROLLER_DEPLOY)
+	kubectl rollout status -n $(BENCHMARK_NAMESPACE) $(WVA_CONTROLLER_DEPLOY) --timeout=$(WVA_ROLLOUT_TIMEOUT)
 
 BURSTY_WORKLOAD    ?= bursty.yaml
 BENCHMARK_WAIT_TIMEOUT ?= 7200
