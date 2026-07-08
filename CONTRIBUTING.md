@@ -97,8 +97,6 @@ workload-variant-autoscaler/
 │   ├── e2e/             # End-to-end tests
 │   └── utils/           # Test utilities
 ├── hack/                 # Dev scripts (e.g. hack/burst_load_generator.sh for manual load)
-└── charts/               # Helm charts
-    └── workload-variant-autoscaler/
 ```
 
 ## WVA-Specific Development Tasks

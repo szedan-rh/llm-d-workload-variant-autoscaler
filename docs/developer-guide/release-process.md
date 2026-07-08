@@ -90,9 +90,6 @@ The [llm-d](https://github.com/llm-d/llm-d) repo hosts a **workload-autoscaling 
 3. **Breaking changes and upgrading text**  
    - If the new release has breaking changes, add or update the "Breaking Changes" / "Upgrading" content and migration steps in the README.
 
-4. **Helmfile / values**  
-   - If the guide's `helmfile.yaml.gotmpl` or `workload-autoscaling/values.yaml` (or equivalent) pin the WVA image or chart version, update those to the new version.
-
 **Guide location:** [guides/workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) (main branch). After editing, open a PR in the [llm-d/llm-d](https://github.com/llm-d/llm-d) repo so the guide stays in sync with the WVA release.
 
 ---

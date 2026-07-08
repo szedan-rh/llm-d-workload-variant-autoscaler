@@ -73,7 +73,7 @@ func SystemNamespace() string {
 	return DefaultNamespace
 }
 
-// ConfigMapName returns the main ConfigMap name from environment variable or default.
+// ConfigMapName returns the main ConfigMap name from environment variable or default (DefaultConfigMapName).
 // Set CONFIG_MAP_NAME in the deployment manifest to use a non-default name.
 func ConfigMapName() string {
 	if name := os.Getenv("CONFIG_MAP_NAME"); name != "" {

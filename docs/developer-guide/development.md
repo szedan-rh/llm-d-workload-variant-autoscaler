@@ -74,8 +74,6 @@ workload-variant-autoscaler/
 ├── test/                  # Tests
 │   ├── e2e/                  # E2E tests (consolidated suite: Kind, OpenShift)
 │   └── utils/                 # Test utilities
-└── charts/                # Helm charts
-    └── workload-variant-autoscaler/
 ```
 
 ## Development Workflow
@@ -364,8 +362,8 @@ See [Agentic Workflows Guide](agentic-workflows.md) for detailed information on 
 See the [Release Process](release-process.md) guide for how to cut a release. It covers:
 
 - Pre-release checklist (changelog, optional version bumps, upstream pins)
-- Creating the tag and GitHub Release (which triggers image build and Helm chart publish)
-- What runs automatically: Docker image push, Helm chart version bump and publish to GHCR, and commit-back of chart files
+- Creating the tag and GitHub Release (which triggers the image build)
+- What runs automatically: Docker image build and push to GHCR
 - Post-release (required): update the llm-d [workload-autoscaling](https://github.com/llm-d/llm-d/tree/main/guides/workload-autoscaling) guide to the new WVA version
 - Enabling other team members to perform releases (permissions, secrets, documentation)
 

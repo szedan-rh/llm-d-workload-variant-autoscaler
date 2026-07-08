@@ -88,9 +88,8 @@ func buildSaturationConfigYAMLWithThresholds(analyzerName string, kvCacheThresho
 
 // saturationConfigMapName resolves the active saturation ConfigMap name from controller runtime env.
 func saturationConfigMapName() string {
-	// Match the controller's runtime config map name. Helm deployments often
-	// override SATURATION_CONFIG_MAP_NAME with a release-prefixed value and can
-	// also change the controller deployment name, so discover it by label first.
+	// Match the controller's runtime config map name; discover by label first
+	// since the deployment name can vary across overlays.
 	deps, err := k8sClient.AppsV1().Deployments(cfg.WVANamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "control-plane=controller-manager",
 	})
