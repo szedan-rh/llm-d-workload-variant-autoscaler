@@ -1,46 +1,40 @@
-package v1alpha1
+// Package variant defines the in-memory VariantAutoscaling representation used by
+// the WVA optimization pipeline (collector, analyzers, engines, actuator).
+//
+// It was previously the llmd.ai/v1alpha1 VariantAutoscaling CRD API. The CRD has
+// been removed; discovery now happens by synthesizing these structs from annotated
+// HPAs and KEDA ScaledObjects (see internal/utils/variant_fromannotations.go). The
+// types are kept as plain in-memory structs — they are never registered in a scheme
+// or written to the Kubernetes API server.
+package variant
 
 import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // VariantAutoscalingConfigSpec holds the optional tuning fields for a VariantAutoscaling.
-// It is extracted as a standalone embeddable type so that higher-level controllers
-// (e.g. KServe) can inline it without duplicating field definitions.
 type VariantAutoscalingConfigSpec struct {
 	// VariantCost specifies the cost per replica for this variant (used in saturation analysis).
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Pattern=`^\d+(\.\d+)?$`
-	// +kubebuilder:default="10.0"
 	VariantCost string `json:"variantCost,omitempty"`
 }
 
 // VariantAutoscalingSpec defines the desired state for autoscaling a model variant.
-// +kubebuilder:validation:XValidation:rule="!has(self.minReplicas) || self.minReplicas <= self.maxReplicas",message="minReplicas must be less than or equal to maxReplicas"
 type VariantAutoscalingSpec struct {
 	// ScaleTargetRef references the scalable resource to manage.
 	// This follows the same pattern as HorizontalPodAutoscaler.
-	// +kubebuilder:validation:Required
 	ScaleTargetRef autoscalingv2.CrossVersionObjectReference `json:"scaleTargetRef"`
 
 	// ModelID specifies the unique identifier of the model to be autoscaled.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:Required
 	ModelID string `json:"modelID"`
 
 	// MinReplicas is the lower bound on the number of replicas for this variant.
 	// A value of 0 enables scale-to-zero when the model is idle.
-	// Defaults to 1, preserving existing behavior for VAs that omit this field.
-	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:default=1
-	// +optional
 	MinReplicas *int32 `json:"minReplicas,omitempty"`
 
 	// MaxReplicas is the upper bound on the number of replicas for this variant.
 	// The autoscaler will never scale beyond this value regardless of load.
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=2
 	MaxReplicas int32 `json:"maxReplicas"`
 
 	// VariantAutoscalingConfigSpec holds optional tuning fields that integrators can embed.
@@ -48,22 +42,16 @@ type VariantAutoscalingSpec struct {
 }
 
 // VariantAutoscalingStatus represents the current status of autoscaling for a variant,
-// including the current allocation, desired optimized allocation, and actuation status.
+// including the desired optimized allocation and actuation status.
 type VariantAutoscalingStatus struct {
-
 	// DesiredOptimizedAlloc indicates the target optimized allocation based on autoscaling logic.
 	DesiredOptimizedAlloc OptimizedAlloc `json:"desiredOptimizedAlloc,omitempty"`
 
 	// Actuation provides details about the actuation process and its current status.
 	Actuation ActuationStatus `json:"actuation,omitempty"`
 
-	// Conditions represent the latest available observations of the VariantAutoscaling's state
-	// +kubebuilder:validation:Optional
-	// +patchMergeKey=type
-	// +patchStrategy=merge
-	// +listType=map
-	// +listMapKey=type
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+	// Conditions represent the latest available observations of the VariantAutoscaling's state.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // OptimizedAlloc describes the target optimized allocation for a model variant.
@@ -74,12 +62,10 @@ type OptimizedAlloc struct {
 	// Accelerator is the type of accelerator for the optimized allocation.
 	//
 	// Deprecated: This field is deprecated and will be removed in a future version. Use node selector or node affinity from scale target instead.
-	// +optional
 	Accelerator string `json:"accelerator,omitempty"`
 
 	// NumReplicas is the number of replicas for the optimized allocation.
 	// nil means no optimization decision has been made yet.
-	// +kubebuilder:validation:Minimum=0
 	NumReplicas *int32 `json:"numReplicas,omitempty"`
 }
 
@@ -89,20 +75,14 @@ type ActuationStatus struct {
 	Applied bool `json:"applied"`
 }
 
-// +kubebuilder:deprecatedversion:warning="VariantAutoscaling is deprecated and will be removed in a future release. Migrate to the annotation-based path (add llm-d.ai/managed=true to your HPA or ScaledObject). See docs/developer-guide/migrating-from-va-crd.md for migration steps."
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=va
-// +kubebuilder:printcolumn:name="Target",type=string,JSONPath=".spec.scaleTargetRef.name"
-// +kubebuilder:printcolumn:name="Model",type=string,JSONPath=".spec.modelID"
-// +kubebuilder:printcolumn:name="Min",type=integer,JSONPath=".spec.minReplicas"
-// +kubebuilder:printcolumn:name="Max",type=integer,JSONPath=".spec.maxReplicas"
-// +kubebuilder:printcolumn:name="Optimized",type=string,JSONPath=".status.desiredOptimizedAlloc.numReplicas"
-// +kubebuilder:printcolumn:name="MetricsReady",type=string,JSONPath=".status.conditions[?(@.type=='MetricsAvailable')].status"
-// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
-
-// VariantAutoscaling is the Schema for the variantautoscalings API.
-// It represents the autoscaling configuration and status for a model variant.
+// VariantAutoscaling is the in-memory representation of the autoscaling configuration
+// and status for a model variant. It embeds metav1.TypeMeta/ObjectMeta so downstream
+// code can continue to read Name/Namespace/Labels/Annotations and record Kubernetes
+// Events against it, as it did with the former CRD.
+//
+// It implements runtime.Object so the shared EventRecorder can reference it, but it is
+// never registered in a scheme or persisted to the Kubernetes API server — variants are
+// synthesized from annotated HPAs/ScaledObjects.
 type VariantAutoscaling struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -115,17 +95,12 @@ type VariantAutoscaling struct {
 }
 
 // VariantAutoscalingList contains a list of VariantAutoscaling resources.
-// +kubebuilder:object:root=true
 type VariantAutoscalingList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 
 	// Items is the list of VariantAutoscaling resources.
 	Items []VariantAutoscaling `json:"items"`
-}
-
-func init() {
-	SchemeBuilder.Register(&VariantAutoscaling{}, &VariantAutoscalingList{})
 }
 
 // Condition Types for VariantAutoscaling
@@ -190,4 +165,32 @@ func (va *VariantAutoscaling) GetScaleTargetName() string {
 // GetScaleTargetKind returns the kind of the scale target resource.
 func (va *VariantAutoscaling) GetScaleTargetKind() string {
 	return va.Spec.ScaleTargetRef.Kind
+}
+
+// SetCondition sets the specified condition on the VariantAutoscaling status.
+func SetCondition(va *VariantAutoscaling, conditionType string, status metav1.ConditionStatus, reason, message string) {
+	condition := metav1.Condition{
+		Type:               conditionType,
+		Status:             status,
+		ObservedGeneration: va.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+	meta.SetStatusCondition(&va.Status.Conditions, condition)
+}
+
+// GetCondition returns the condition with the specified type.
+func GetCondition(va *VariantAutoscaling, conditionType string) *metav1.Condition {
+	return meta.FindStatusCondition(va.Status.Conditions, conditionType)
+}
+
+// IsConditionTrue returns true if the condition with the specified type has status True.
+func IsConditionTrue(va *VariantAutoscaling, conditionType string) bool {
+	return meta.IsStatusConditionTrue(va.Status.Conditions, conditionType)
+}
+
+// IsConditionFalse returns true if the condition with the specified type has status False.
+func IsConditionFalse(va *VariantAutoscaling, conditionType string) bool {
+	return meta.IsStatusConditionFalse(va.Status.Conditions, conditionType)
 }

@@ -14,9 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
@@ -44,13 +42,15 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 			primaryNamespace    = "llm-d-sim"
 			secondaryNamespace  = "llm-d-sim-dual"
 			secondaryController = "workload-variant-autoscaler-system-dual"
-			primaryHPAName      = "smoke-test-dual-primary-hpa"
-			secondaryHPAName    = "smoke-test-dual-secondary-hpa"
-			primaryModelName    = "smoke-test-dual-primary-ms"
-			secondaryModelName  = "smoke-test-dual-secondary-ms"
-			poolName            = "smoke-test-dual-pool"
-			sharedVAName        = "smoke-test-dual-shared-va"
-			controllerInstance  = "dual-secondary"
+			// Deliberately identical HPA object name in both namespaces to prove
+			// isolation works despite overlapping (colliding) variant names. The HPA
+			// object name is also the variant_name label on wva_desired_replicas.
+			sharedHPABase      = "smoke-test-dual-shared"
+			sharedVariantName  = sharedHPABase + "-hpa"
+			primaryModelName   = "smoke-test-dual-primary-ms"
+			secondaryModelName = "smoke-test-dual-secondary-ms"
+			poolName           = "smoke-test-dual-pool"
+			controllerInstance = "dual-secondary"
 		)
 
 		BeforeAll(func() {
@@ -213,74 +213,70 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 			By("Creating model services in both namespaces")
-			err = fixtures.EnsureModelService(ctx, k8sClient, primaryNamespace, primaryModelName, poolName, cfg.ModelID, sharedVAName, cfg.UseSimulator, cfg.MaxNumSeqs)
+			err = fixtures.EnsureModelService(ctx, k8sClient, primaryNamespace, primaryModelName, poolName, cfg.ModelID, sharedVariantName, cfg.UseSimulator, cfg.MaxNumSeqs)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create primary model service")
 			err = fixtures.EnsureService(ctx, k8sClient, primaryNamespace, primaryModelName, primaryModelName+"-decode", 8000)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create primary service")
 			err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, primaryNamespace, primaryModelName, primaryModelName+"-decode")
 			Expect(err).NotTo(HaveOccurred(), "Failed to create primary ServiceMonitor")
 
-			err = fixtures.EnsureModelService(ctx, k8sClient, secondaryNamespace, secondaryModelName, poolName, cfg.ModelID, sharedVAName, cfg.UseSimulator, cfg.MaxNumSeqs)
+			err = fixtures.EnsureModelService(ctx, k8sClient, secondaryNamespace, secondaryModelName, poolName, cfg.ModelID, sharedVariantName, cfg.UseSimulator, cfg.MaxNumSeqs)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary model service")
 			err = fixtures.EnsureService(ctx, k8sClient, secondaryNamespace, secondaryModelName, secondaryModelName+"-decode", 8000)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary service")
 			err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, secondaryNamespace, secondaryModelName, secondaryModelName+"-decode")
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary ServiceMonitor")
 
-			By("Creating overlapping VA names for each controller namespace")
-			err = fixtures.EnsureVariantAutoscalingWithDefaults(ctx, crClient, primaryNamespace, sharedVAName, primaryModelName+"-decode", cfg.ModelID, "H100", "")
-			Expect(err).NotTo(HaveOccurred(), "Failed to create primary VA")
-			err = fixtures.EnsureVariantAutoscalingWithDefaults(ctx, crClient, secondaryNamespace, sharedVAName, secondaryModelName+"-decode", cfg.ModelID, "H100", controllerInstance)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary VA")
-
-			By("Creating HPAs in both namespaces for the shared VA name")
-			err = fixtures.EnsureHPA(ctx, k8sClient, primaryNamespace, primaryHPAName, primaryModelName+"-decode", sharedVAName, 1, 10)
+			// Create annotated HPAs (the discovery source AND scaler) with an
+			// overlapping object name in both namespaces. The HPA object name is the
+			// variant_name label; the WVA controller-instance label on each HPA is what
+			// keeps the two namespace-scoped controllers isolated. The secondary
+			// controller (CONTROLLER_INSTANCE=controllerInstance) only reconciles the
+			// HPA carrying a matching label; the cluster-scoped primary has no
+			// CONTROLLER_INSTANCE and reconciles the unlabeled primary HPA.
+			By("Creating annotated HPAs in both namespaces with the shared variant name")
+			err = fixtures.EnsureHPA(ctx, k8sClient, primaryNamespace, sharedHPABase, primaryModelName+"-decode", sharedVariantName, 1, 10,
+				fixtures.WithWVAAnnotations(cfg.ModelID, "30.0"))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create primary HPA")
-			err = fixtures.EnsureHPA(ctx, k8sClient, secondaryNamespace, secondaryHPAName, secondaryModelName+"-decode", sharedVAName, 1, 10)
+			DeferCleanup(func() {
+				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(primaryNamespace).Delete(ctx, sharedVariantName, metav1.DeleteOptions{})
+			})
+
+			err = fixtures.EnsureHPA(ctx, k8sClient, secondaryNamespace, sharedHPABase, secondaryModelName+"-decode", sharedVariantName, 1, 10,
+				fixtures.WithWVAAnnotations(cfg.ModelID, "30.0"))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create secondary HPA")
+			DeferCleanup(func() {
+				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Delete(ctx, sharedVariantName, metav1.DeleteOptions{})
+			})
+
+			// Stamp the controller-instance label on the secondary HPA so WVA's
+			// annotation discovery attributes its synthesized variant to the secondary
+			// controller (VariantAutoscalingFromHPA copies HPA labels; readyVariantAutoscalings
+			// filters by wva.llmd.ai/controller-instance). The primary HPA is left
+			// unlabeled so the cluster-scoped primary controller owns it.
+			By("Labeling the secondary HPA with the controller-instance for isolation")
+			secondaryHPA, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Get(ctx, sharedVariantName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "Failed to read secondary HPA for labeling")
+			if secondaryHPA.Labels == nil {
+				secondaryHPA.Labels = map[string]string{}
+			}
+			secondaryHPA.Labels[constants.ControllerInstanceLabelKey] = controllerInstance
+			_, err = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Update(ctx, secondaryHPA, metav1.UpdateOptions{})
+			Expect(err).NotTo(HaveOccurred(), "Failed to label secondary HPA with controller-instance")
 		})
 
 		It("should expose isolated external metrics for each namespace-scoped controller", func() {
-			By("Waiting for both VAs to be reconciled")
-			Eventually(func(g Gomega) {
-				primaryVA := &variantautoscalingv1alpha1.VariantAutoscaling{}
-				err := crClient.Get(ctx, client.ObjectKey{Name: sharedVAName, Namespace: primaryNamespace}, primaryVA)
-				g.Expect(err).NotTo(HaveOccurred())
-				c := variantautoscalingv1alpha1.GetCondition(primaryVA, variantautoscalingv1alpha1.TypeTargetResolved)
-				g.Expect(c).NotTo(BeNil())
-				g.Expect(c.Status).To(Equal(metav1.ConditionTrue))
-
-				secondaryVA := &variantautoscalingv1alpha1.VariantAutoscaling{}
-				err = crClient.Get(ctx, client.ObjectKey{Name: sharedVAName, Namespace: secondaryNamespace}, secondaryVA)
-				g.Expect(err).NotTo(HaveOccurred())
-				c = variantautoscalingv1alpha1.GetCondition(secondaryVA, variantautoscalingv1alpha1.TypeTargetResolved)
-				g.Expect(c).NotTo(BeNil())
-				g.Expect(c.Status).To(Equal(metav1.ConditionTrue))
-			}, time.Duration(cfg.EventuallyLongSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
-			By("Waiting for Prometheus-backed metrics on both VAs (HPA/external-metrics need this)")
-			Eventually(func(g Gomega) {
-				primaryVA := &variantautoscalingv1alpha1.VariantAutoscaling{}
-				err := crClient.Get(ctx, client.ObjectKey{Name: sharedVAName, Namespace: primaryNamespace}, primaryVA)
-				g.Expect(err).NotTo(HaveOccurred())
-				mc := variantautoscalingv1alpha1.GetCondition(primaryVA, variantautoscalingv1alpha1.TypeMetricsAvailable)
-				g.Expect(mc).NotTo(BeNil())
-				g.Expect(mc.Status).To(Equal(metav1.ConditionTrue))
-
-				secondaryVA := &variantautoscalingv1alpha1.VariantAutoscaling{}
-				err = crClient.Get(ctx, client.ObjectKey{Name: sharedVAName, Namespace: secondaryNamespace}, secondaryVA)
-				g.Expect(err).NotTo(HaveOccurred())
-				mc = variantautoscalingv1alpha1.GetCondition(secondaryVA, variantautoscalingv1alpha1.TypeMetricsAvailable)
-				g.Expect(mc).NotTo(BeNil())
-				g.Expect(mc.Status).To(Equal(metav1.ConditionTrue))
-			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
-
+			// Both controllers now discover their variant from the annotated HPA and
+			// emit wva_desired_replicas. WVA no longer writes VA .status, so isolation
+			// is verified purely through the per-namespace external metrics surface:
+			// each namespace must return exactly its own variant, attributed to the
+			// controller that owns it.
 			By("Querying external metrics for primary namespace")
 			Eventually(func(g Gomega) {
 				raw, err := k8sClient.RESTClient().
 					Get().
 					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/"+primaryNamespace+"/"+constants.WVADesiredReplicas).
-					Param("labelSelector", "variant_name="+sharedVAName+",exported_namespace="+primaryNamespace).
+					Param("labelSelector", "variant_name="+sharedVariantName+",exported_namespace="+primaryNamespace).
 					DoRaw(ctx)
 				g.Expect(err).NotTo(HaveOccurred())
 				var metricList externalMetricValueList
@@ -294,7 +290,7 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 				raw, err := k8sClient.RESTClient().
 					Get().
 					AbsPath("/apis/external.metrics.k8s.io/v1beta1/namespaces/"+secondaryNamespace+"/"+constants.WVADesiredReplicas).
-					Param("labelSelector", "variant_name="+sharedVAName+",exported_namespace="+secondaryNamespace).
+					Param("labelSelector", "variant_name="+sharedVariantName+",exported_namespace="+secondaryNamespace).
 					DoRaw(ctx)
 				g.Expect(err).NotTo(HaveOccurred())
 				var metricList externalMetricValueList
@@ -308,7 +304,7 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 
 			By("Verifying both HPAs report active metric scaling")
 			Eventually(func(g Gomega) {
-				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(primaryNamespace).Get(ctx, primaryHPAName+"-hpa", metav1.GetOptions{})
+				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(primaryNamespace).Get(ctx, sharedVariantName, metav1.GetOptions{})
 				g.Expect(err).NotTo(HaveOccurred())
 				var scalingActive *autoscalingv2.HorizontalPodAutoscalerCondition
 				for i := range hpa.Status.Conditions {
@@ -318,14 +314,14 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 					}
 				}
 				if scalingActive == nil || scalingActive.Status != corev1.ConditionTrue {
-					GinkgoWriter.Printf("primary HPA %s/%s conditions: %+v\n", primaryNamespace, primaryHPAName+"-hpa", hpa.Status.Conditions)
+					GinkgoWriter.Printf("primary HPA %s/%s conditions: %+v\n", primaryNamespace, sharedVariantName, hpa.Status.Conditions)
 				}
 				g.Expect(scalingActive).NotTo(BeNil(), "Primary HPA should report ScalingActive condition")
 				g.Expect(scalingActive.Status).To(Equal(corev1.ConditionTrue), "Primary HPA should have external metric available")
 			}, time.Duration(cfg.EventuallyExtendedSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 			Eventually(func(g Gomega) {
-				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Get(ctx, secondaryHPAName+"-hpa", metav1.GetOptions{})
+				hpa, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(secondaryNamespace).Get(ctx, sharedVariantName, metav1.GetOptions{})
 				g.Expect(err).NotTo(HaveOccurred())
 				var scalingActive *autoscalingv2.HorizontalPodAutoscalerCondition
 				for i := range hpa.Status.Conditions {
@@ -335,7 +331,7 @@ var _ = Describe("Multi-controller Tests - Dual namespace-scoped isolation", Lab
 					}
 				}
 				if scalingActive == nil || scalingActive.Status != corev1.ConditionTrue {
-					GinkgoWriter.Printf("secondary HPA %s/%s conditions: %+v\n", secondaryNamespace, secondaryHPAName+"-hpa", hpa.Status.Conditions)
+					GinkgoWriter.Printf("secondary HPA %s/%s conditions: %+v\n", secondaryNamespace, sharedVariantName, hpa.Status.Conditions)
 				}
 				g.Expect(scalingActive).NotTo(BeNil(), "Secondary HPA should report ScalingActive condition")
 				g.Expect(scalingActive.Status).To(Equal(corev1.ConditionTrue), "Secondary HPA should have external metric available")

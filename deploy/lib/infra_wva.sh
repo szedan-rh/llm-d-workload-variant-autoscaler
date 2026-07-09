@@ -118,8 +118,6 @@ EOF
         done
     fi
 
-    log_info "Installing WVA CRDs..."
-    kubectl apply -k "$WVA_PROJECT/config/base/crd/"
 
     log_info "Applying Kustomize overlay: $kustomize_overlay"
     kubectl apply -k "$tmp_overlay"

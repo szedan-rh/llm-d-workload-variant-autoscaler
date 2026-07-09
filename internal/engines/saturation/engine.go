@@ -30,9 +30,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	actuator "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/actuator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
@@ -43,7 +41,6 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/discovery"
 	queueingmodel "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/queueingmodel"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/common"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/executor"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/pipeline"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
@@ -53,6 +50,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
+	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 )
 
 // analyzerEntry binds a registered analyzer to its name. The engine stores
@@ -1408,19 +1406,9 @@ func (e *Engine) applySaturationDecisions(
 				"variant", vaName)
 		}
 
-		// Fetch latest version from API server to avoid conflicts.
-		// Synthetic (annotation-sourced) variants have no CRD instance; use the in-memory copy.
-		var updateVa llmdVariantAutoscalingV1alpha1.VariantAutoscaling
-		if utils.IsSynthetic(va) {
-			updateVa = *va.DeepCopy()
-		} else {
-			if err := utils.GetVariantAutoscalingWithBackoff(ctx, e.client, va.Name, va.Namespace, &updateVa); err != nil {
-				msg := "Failed to get latest VA from API server"
-				e.recordOptimizationFailedEvent([]llmdVariantAutoscalingV1alpha1.VariantAutoscaling{*va}, msg)
-				logger.Error(err, msg, "name", va.Name)
-				continue
-			}
-		}
+		// Variants are synthesized in-memory from annotated HPAs/ScaledObjects;
+		// there is no API-server object to fetch, so work on a copy.
+		updateVa := *va.DeepCopy()
 
 		// Update CurrentAlloc from local analysis (which has the latest metrics)
 		// We use currentAllocations map instead of Status.CurrentAlloc
@@ -1432,9 +1420,6 @@ func (e *Engine) applySaturationDecisions(
 			// Previously we updated va.Status.CurrentAlloc = currentAlloc
 			// Now we just don't update status with it.
 		}
-
-		// Check if we have metrics data for this VA (used for cache below)
-		_, hasAllocation := currentAllocations[vaName]
 
 		// Determine target replicas and accelerator
 		var targetReplicas int
@@ -1486,26 +1471,8 @@ func (e *Engine) applySaturationDecisions(
 		// If we still don't have an accelerator name (e.g. new VA, no decision, no current alloc), we can't update status sensibly
 		// But we still need to set MetricsAvailable condition via the cache
 		if acceleratorName == "" {
-			logger.Info("Skipping status update for VA without accelerator info, but setting MetricsAvailable=False",
+			logger.Info("Skipping status update for variant without accelerator info",
 				"variant", vaName, "cacheKey.name", va.Name, "cacheKey.namespace", va.Namespace)
-			// Synthetic variants have no CRD status to patch; skip cache/trigger.
-			if !utils.IsSynthetic(va) {
-				// Still set the cache entry so the controller can set MetricsAvailable=False.
-				// This is a partial decision for metrics status only - other fields like
-				// TargetReplicas and AcceleratorName are left at zero values since we don't
-				// have enough information to set them.
-				common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
-					VariantName:      vaName,
-					Namespace:        va.Namespace,
-					MetricsAvailable: false,
-					MetricsReason:    llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing,
-					MetricsMessage:   llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable,
-				})
-				// Trigger reconciler to apply the condition
-				common.DecisionTrigger <- event.GenericEvent{
-					Object: &updateVa,
-				}
-			}
 		}
 
 		// Emit a K8s event when accelerator cannot be resolved so operators
@@ -1640,52 +1607,10 @@ func (e *Engine) applySaturationDecisions(
 			act.RecordSaturationFreshness(ctx, va.Name, va.Namespace, false)
 		}
 
-		// Update Shared State and Trigger Reconcile via Channel.
-		// Synthetic (annotation-sourced) variants have no CRD status to patch;
-		// metric emission above is their sole output, so skip cache/trigger.
-		if !utils.IsSynthetic(va) {
-			// 1. Update Cache
-			// Determine MetricsAvailable status for the cache.
-			// - hasAllocation is true when we successfully collected current replica metrics
-			//   for this variant during this loop (metrics pipeline is working).
-			// - hasDecision is true when the optimizer produced a scaling decision based on
-			//   saturation metrics in this run.
-			// - The accelerator must also be resolved: the replica scaling gauges are
-			//   always emitted (with an "unresolved" accelerator_type) so scaling is not
-			//   blocked, but the accelerator-dimensioned saturation/capacity metrics are
-			//   only emitted when the type is resolved. MetricsAvailable therefore tracks
-			//   full (accelerator-dimensioned) observability, and is False until the
-			//   accelerator resolves even though scaling itself proceeds.
-			metricsAvailable := (hasAllocation || hasDecision) && constants.IsAcceleratorResolved(acceleratorName)
-			metricsReason := llmdVariantAutoscalingV1alpha1.ReasonMetricsMissing
-			metricsMessage := llmdVariantAutoscalingV1alpha1.MessageMetricsUnavailable
-			if metricsAvailable {
-				metricsReason = llmdVariantAutoscalingV1alpha1.ReasonMetricsFound
-				metricsMessage = llmdVariantAutoscalingV1alpha1.MessageMetricsAvailable
-			}
-
-			// Use the sanitized statusAccelerator (computed above) rather than the raw
-			// acceleratorName. The controller reads this cache entry and writes
-			// AcceleratorName verbatim into Status.DesiredOptimizedAlloc.Accelerator,
-			// so passing the sentinel here would leak it into the CRD status —
-			// violating the "never persist the sentinel to status" invariant.
-			common.DecisionCache.Set(va.Name, va.Namespace, interfaces.VariantDecision{
-				VariantName:       vaName,
-				Namespace:         va.Namespace,
-				TargetReplicas:    targetReplicas,
-				AcceleratorName:   statusAccelerator,
-				LastRunTime:       metav1.Now(),
-				CurrentAllocation: currentAllocations[vaName],
-				MetricsAvailable:  metricsAvailable,
-				MetricsReason:     metricsReason,
-				MetricsMessage:    metricsMessage,
-			})
-
-			// 2. Trigger Reconciler
-			common.DecisionTrigger <- event.GenericEvent{
-				Object: &updateVa,
-			}
-		}
+		// Metric emission above (act.EmitMetrics) is the sole output for
+		// annotation-sourced variants: KEDA/HPA reads wva_desired_replicas
+		// directly. There is no CRD status to patch, so no cache write or
+		// reconcile trigger is needed.
 
 		if hasDecision {
 			if decision.Action != interfaces.ActionNoChange {

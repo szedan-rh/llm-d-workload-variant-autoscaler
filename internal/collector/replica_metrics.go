@@ -52,13 +52,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/locator"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/registration"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/collector/source"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/config"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
-	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/controller/indexers"
 	saturation_v2 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/engines/analyzers/saturation_v2"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/inferenceengine"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/interfaces"
@@ -67,7 +65,7 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/saturation"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/utils/scaletarget"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	llmdVariantAutoscalingV1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/internal/variant"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/record"
 )
@@ -252,54 +250,16 @@ func (c *ReplicaMetricsCollector) buildInstanceKey(ctx context.Context, namespac
 			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("locator.Locate failed; treating pod as unmanaged",
 				"pod", podName, "namespace", namespace, "error", err)
 		case ms == nil:
-			// TODO(va-removal): delete this whole case when the VariantAutoscaling
-			// CRD is removed. It exists only for the CRD-based dual-mode path; the
-			// locator's ResolveScaleTarget method added for it can also go.
-			//
-			// No managed scaler in the pod's owner chain. This is the v0.7.0
-			// CRD dual-mode path: KServe creates its own HPA without
-			// llm-d.ai/managed=true, so the locator's managed-only lookup
-			// returns nil. Resolve the pod's scale target directly and look up
-			// the VA that targets it. Leaves vaName="" when no VA matches,
-			// preserving the unattributed-pod skip below.
-			if ref, ok, terr := c.locator.ResolveScaleTarget(ctx, namespace, podName); terr != nil {
-				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("locator.ResolveScaleTarget failed; treating pod as unmanaged",
-					"pod", podName, "namespace", namespace, "error", terr)
-			} else if ok {
-				if va, lookupErr := indexers.FindVAForScaleTarget(ctx, c.k8sClient, ref, namespace); lookupErr == nil && va != nil {
-					vaName = va.Name
-				}
-			}
+			// No managed scaler in the pod's owner chain — the pod is unmanaged.
+			// Leaves vaName="" so the caller skips it.
 		default:
+			// The synthetic VariantAutoscaling is always keyed by the scaler name
+			// (the HPA or ScaledObject name), so use it directly.
 			switch {
 			case ms.HPA != nil:
-				// Prefer the VA CRD name over the HPA name: for CRD-based setups (e.g.
-				// KServe) the VA name and HPA name differ, and metrics are keyed by VA
-				// name. Fall back to HPA name for annotation-based setups where no VA
-				// CRD exists and the synthetic VA is keyed by the scaler name.
-				//
-				// TODO(va-removal): when the VariantAutoscaling CRD is removed, drop the
-				// FindVAForScaleTarget lookup and keep only `vaName = ms.HPA.Name` (the
-				// synthetic VA is always keyed by the scaler name).
-				if va, lookupErr := indexers.FindVAForScaleTarget(ctx, c.k8sClient, ms.HPA.Spec.ScaleTargetRef, namespace); lookupErr == nil && va != nil {
-					vaName = va.Name
-				} else {
-					vaName = ms.HPA.Name
-				}
+				vaName = ms.HPA.Name
 			case ms.ScaledObject != nil:
-				soRef := autoscalingv2.CrossVersionObjectReference{
-					APIVersion: ms.ScaledObject.Spec.ScaleTargetRef.APIVersion,
-					Kind:       ms.ScaledObject.Spec.ScaleTargetRef.Kind,
-					Name:       ms.ScaledObject.Spec.ScaleTargetRef.Name,
-				}
-				// TODO(va-removal): when the VariantAutoscaling CRD is removed, drop the
-				// FindVAForScaleTarget lookup and keep only `vaName = ms.ScaledObject.Name`
-				// (the synthetic VA is always keyed by the scaler name).
-				if va, lookupErr := indexers.FindVAForScaleTarget(ctx, c.k8sClient, soRef, namespace); lookupErr == nil && va != nil {
-					vaName = va.Name
-				} else {
-					vaName = ms.ScaledObject.Name
-				}
+				vaName = ms.ScaledObject.Name
 			}
 		}
 	}

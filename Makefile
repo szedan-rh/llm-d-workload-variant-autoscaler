@@ -97,13 +97,11 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." \
-		output:crd:artifacts:config=config/base/crd \
+manifests: controller-gen ## Generate WebhookConfiguration and ClusterRole objects.
+	$(CONTROLLER_GEN) rbac:roleName=manager-role webhook paths="./..." \
 		output:rbac:artifacts:config=config/base/rbac
-	# controller-gen writes `<group>_<plural>.yaml` and `role.yaml`; rename to
-	# match the (<app>-)?<kind>.yaml convention used under config/.
-	mv config/base/crd/llmd.ai_variantautoscalings.yaml config/base/crd/variantautoscalings-customresourcedefinition.yaml
+	# controller-gen writes `role.yaml`; rename to match the
+	# (<app>-)?<kind>.yaml convention used under config/.
 	mv config/base/rbac/role.yaml config/base/rbac/manager-clusterrole.yaml
 
 .PHONY: generate

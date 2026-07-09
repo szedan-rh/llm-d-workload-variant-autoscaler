@@ -34,8 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
-	llmdv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -62,16 +60,15 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO()) //nolint:fatcontext // shared across BeforeSuite/AfterSuite
 
 	var err error
-	err = llmdv1alpha1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
 	err = kedav1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
-	crdPaths := []string{filepath.Join("..", "..", "..", "config", "base", "crd")}
+	// Only the KEDA ScaledObject CRD is needed; HPAs are a built-in type and
+	// VariantAutoscaling is no longer a CRD.
+	var crdPaths []string
 	if dir := getKEDACRDDir(); dir != "" {
 		crdPaths = append(crdPaths, dir)
 	}

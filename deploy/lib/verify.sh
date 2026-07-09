@@ -103,7 +103,7 @@ print_summary() {
     echo "1. Deploy llm-d (EPP, gateway, ModelService) when needed:"
     echo "     See llm-d project guides at https://github.com/llm-d/llm-d"
     echo ""
-    echo "2. Create VariantAutoscaling / HPA via tests, operators, or kustomize overlays."
+    echo "2. Create an annotated HPA or KEDA ScaledObject (llm-d.ai/managed=true) so WVA discovers the variant."
     echo ""
     echo "3. View WVA logs:"
     echo "   kubectl logs -n $WVA_NS -l app.kubernetes.io/name=workload-variant-autoscaler -f"

@@ -10,17 +10,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
 )
 
-// Annotation-based discovery e2e tests verify that WVA can discover variants from
-// annotated HPA / ScaledObject resources without any VariantAutoscaling CRD.
-// These tests are the Phase 1 dual-mode counterpart; the VA-based tests remain
-// untouched and will be migrated in Phase 3.
+// Annotation-based discovery e2e tests verify that WVA discovers variants from
+// annotated HPA / ScaledObject resources. Annotation-based discovery is the only
+// discovery path (the VariantAutoscaling CRD has been removed).
 var _ = Describe("Annotation-based variant discovery", Serial, func() {
 
 	// ── Scenario A: Basic lifecycle (without llm-d.ai/variant label) ────────────
@@ -72,16 +69,6 @@ var _ = Describe("Annotation-based variant discovery", Serial, func() {
 				err = fixtures.EnsureHPA(ctx, k8sClient, ns, hpaBaseName, deploymentName, hpaName, 1, 10,
 					fixtures.WithWVAAnnotations(cfg.ModelID, "30.0"))
 				Expect(err).NotTo(HaveOccurred(), "Failed to create annotated HPA")
-			}
-		})
-
-		It("should not create a VariantAutoscaling CR", func() {
-			vaList := &variantautoscalingv1alpha1.VariantAutoscalingList{}
-			err := crClient.List(ctx, vaList, client.InNamespace(ns))
-			Expect(err).NotTo(HaveOccurred())
-			for _, va := range vaList.Items {
-				Expect(va.Name).NotTo(Equal(hpaName),
-					"No VA should be created for annotation-based discovery")
 			}
 		})
 
@@ -192,16 +179,6 @@ var _ = Describe("Annotation-based variant discovery", Serial, func() {
 				err = fixtures.EnsureHPA(ctx, k8sClient, ns, hpaBaseName, deploymentName, hpaName, 1, 10,
 					fixtures.WithWVAAnnotations(cfg.ModelID, "30.0"))
 				Expect(err).NotTo(HaveOccurred(), "Failed to create annotated HPA")
-			}
-		})
-
-		It("should not create a VariantAutoscaling CR", func() {
-			vaList := &variantautoscalingv1alpha1.VariantAutoscalingList{}
-			err := crClient.List(ctx, vaList, client.InNamespace(ns))
-			Expect(err).NotTo(HaveOccurred())
-			for _, va := range vaList.Items {
-				Expect(va.Name).NotTo(Equal(hpaName),
-					"No VA should be created for annotation-based discovery")
 			}
 		})
 
